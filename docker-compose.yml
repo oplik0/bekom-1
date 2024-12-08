@@ -19,6 +19,7 @@ services:
       - "--experimental.plugins.coraza.version=v0.3.0"
       - "--log"
       - --api
+      - --accesslog
     ports:
       - "80:80"
       - "443:443"
@@ -35,7 +36,7 @@ services:
         - "traefik.enable=true"
         - traefik.docker.network=webnet
         - "traefik.tls.options.default.minVersion=VersionTLS13"
-        # - traefik.http.middlewares.admin-auth.basicauth.users=opliko:${HASHED_PASSWORD?Variable not set}
+        - traefik.http.middlewares.admin-auth.basicauth.users=netrunners:$$apr1$$37ep4xmf$$X5BMTP2zFovOs5AI5CZEK0
         # https-redirect middleware to redirect HTTP to HTTPS
         # It can be re-used by other stacks in other Docker Compose files
         - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
@@ -55,12 +56,11 @@ services:
         # Use the "le" (Let's Encrypt) resolver created below
         - traefik.http.routers.traefik-public-https.tls.certresolver=le
         # Enable HTTP Basic auth, using the middleware created above
-        # - traefik.http.routers.traefik-public-https.middlewares=admin-auth
+        - traefik.http.routers.traefik-public-https.middlewares=admin-auth
         # Define the port inside of the Docker service to use
         - traefik.http.services.traefik-public.loadbalancer.server.port=8080
         # - "traefik.tls.stores.default.defaultgeneratedcert.resolver=myresolver"
         # - "traefik.tls.stores.default.defaultgeneratedcert.domain.main=bekom.pw.opliko.dev"
-        
 
   db:
     # hardened MariaDB image
@@ -112,10 +112,20 @@ services:
         - "traefik.http.routers.ctfd.tls=true"
         - "traefik.http.routers.ctfd.tls.certresolver=le"
         - "traefik.http.services.ctfd.loadbalancer.server.port=8000"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[0]=SecRuleEngine On"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[1]=SecAuditLog /dev/stdout"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[2]=Include @crs-setup.conf.example"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[3]=Include @owasp_crs/**.conf"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[0]=Include @coraza.conf-recommended"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[1]=Include @crs-setup.conf.example"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[2]=Include @owasp_crs/**.conf"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[3]=SecDebugLog /dev/stdout"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[4]=SecDebugLogLevel 2"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=SecRequestBodyAccess Off"
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=Include @coraza.conf-recommended"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[6]=SecAuditLog /dev/stdout"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[7]=SecRuleEngine On"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[8]=SecAction \"id:900000,phase:1,pass,t:none,nolog,tag:'OWASP_CRS',ver:'OWASP_CRS/4.3.0',setvar:tx.blocking_paranoia_level=2\""
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[9]=SecAction \"id:900130,phase:1,pass,t:none,nolog,tag:'OWASP_CRS',ver:'OWASP_CRS/4.3.0',setvar:tx.early_blocking=1\""
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[10]=SecDefaultAction \"phase:1,deny,log,status:400\""
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[11]=SecDefaultAction \"phase:2,deny,log,status:400\""
+
         # from: https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/updated-modsecurity-advanced-topic-of-the-week-mitigating-slow-http-dos-attacks/
         # - "traefik.http.middlewares.waf.plugin.coraza.directives[4]=SecRule RESPONSE_STATUS \"@streq 408\" \"phase:5,t:none,nolog,pass,setvar:ip.slow_dos_counter=+1,expirevar:ip.slow_dos_counter=60\""
         # - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=SecRule IP:SLOW_DOS_COUNTER \"@gt 5\" \"phase:1,t:none,log,drop,msg:'Client Connection Dropped due to high # of slow DoS alerts'\""
