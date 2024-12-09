@@ -21,8 +21,8 @@ services:
       - "--experimental.plugins.coraza.version=v0.3.0"
       - "--log"
       - --api
-      - --accesslog
-      - --log.level=DEBUG
+      # - --accesslog
+      # - --log.level=DEBUG
     ports:
       - "80:80"
       - "443:443"
@@ -31,6 +31,11 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     networks:
       - webnet
+    logging:
+      driver: "syslog"
+      options:
+        syslog-address: "udp://localhost:514"
+        tag: "traefik"
     deploy:
       placement:
         constraints:
@@ -38,7 +43,8 @@ services:
       labels:
         - "traefik.enable=true"
         - traefik.docker.network=bekom_webnet
-        # - "traefik.tls.options.default.minVersion=VersionTLS13"
+        - "traefik.tls.options.default.minVersion=VersionTLS13"
+        - "traefik.tls.options.modern.minVersion=VersionTLS13"
         - traefik.http.middlewares.admin-auth.basicauth.users=netrunners:$$apr1$$37ep4xmf$$X5BMTP2zFovOs5AI5CZEK0
         # https-redirect middleware to redirect HTTP to HTTPS
         # It can be re-used by other stacks in other Docker Compose files
@@ -63,7 +69,6 @@ services:
         - traefik.http.services.traefik-public.loadbalancer.server.port=8080
         # - "traefik.tls.stores.default.defaultgeneratedcert.resolver=myresolver"
         # - "traefik.tls.stores.default.defaultgeneratedcert.domain.main=bekom.pw.opliko.dev"
-
   db:
     # hardened MariaDB image
     image: bitnami/mariadb:11.5
@@ -130,22 +135,21 @@ services:
         - "traefik.http.routers.ctfd.tls=true"
         - "traefik.http.routers.ctfd.tls.certresolver=le"
         - "traefik.http.services.ctfd.loadbalancer.server.port=8000"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[0]=Include @coraza.conf-recommended"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[1]=Include @crs-setup.conf.example"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[2]=Include @owasp_crs/**.conf"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[0]=SecRequestBodyAccess Off"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[1]=SecResponseBodyAccess Off"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[2]=SecAuditLog /dev/stdout"
         - "traefik.http.middlewares.waf.plugin.coraza.directives[3]=SecDebugLog /dev/stdout"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[4]=SecAuditLog /dev/stdout"
-        # - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=SecDebugLogLevel 9"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=SecRequestBodyAccess Off"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[6]=SecResponseBodyAccess Off"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[7]=SecRuleEngine On"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[8]=SecAction \"id:900000,phase:1,pass,t:none,nolog,tag:'OWASP_CRS',ver:'OWASP_CRS/4.3.0',setvar:tx.blocking_paranoia_level=2\""
-        # - "traefik.http.middlewares.waf.plugin.coraza.directives[9]=SecAction \"id:900130,phase:1,pass,t:none,nolog,tag:'OWASP_CRS',ver:'OWASP_CRS/4.3.0',setvar:tx.early_blocking=1\""
-
-        # from: https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/updated-modsecurity-advanced-topic-of-the-week-mitigating-slow-http-dos-attacks/
-        # - "traefik.http.middlewares.waf.plugin.coraza.directives[12]=SecRule RESPONSE_STATUS \"@streq 408\" \"phase:5,t:none,nolog,pass,setvar:ip.slow_dos_counter=+1,tx:ip.slow_dos_counter=60\""
-        # - "traefik.http.middlewares.waf.plugin.coraza.directives[13]=SecRule IP:SLOW_DOS_COUNTER \"@gt 5\" \"phase:1,t:none,log,drop,msg:'Client Connection Dropped due to high # of slow DoS alerts'\""
-        # - "traefik.http.middlewares.waf.plugin.coraza.directives[9]=SecRule REMOTE_ADDR \"194.29.160.181\" \"id:2222223, phase:1, pass, log, logdata:'request from WUT'\""
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[4]=Include @coraza.conf-recommended"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=Include @crs-setup.conf.example"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[6]=Include @owasp_crs/**.conf"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[7]=SecDebugLogLevel 4"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[8]=SecRuleEngine On"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[9]=SecAction \"id:900000,phase:1,pass,t:none,nolog,tag:'OWASP_CRS',ver:'OWASP_CRS/4.3.0',setvar:tx.blocking_paranoia_level=2\""
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[10]=SecRule REMOTE_ADDR \"194.29.160.181\" \"id:2222223, phase:1, pass, log, logdata:'request from WUT'\""
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[11]=SecRule REQUEST_HEADERS:X-Forwarded-For \"@eq 194.29.160.181\" \"id:2222223, phase:1, pass, log, logdata:'request from WUT'\""
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[11]=SecAction \"id:900700, phase:1, nolog, pass, t:none, setvar:'tx.dos_burst_time_slice=30', setvar:'tx.dos_counter_threshold=15', setvar:'tx.dos_block_timeout=20'\""
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[10]=SecRule RESPONSE_STATUS \"@streq 408\" \"phase:5,t:none,nolog,pass,setvar:ip.slow_dos_counter=+1,tx:ip.slow_dos_counter=60\""
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[11]=SecRule IP:SLOW_DOS_COUNTER \"@gt 5\" \"phase:1,t:none,log,drop,msg:'Client Connection Dropped due to high # of slow DoS alerts'\""
     secrets:
       - db_password
 
