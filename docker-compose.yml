@@ -6,11 +6,13 @@ services:
     command:
       - "--providers.docker=true"
       - "--providers.swarm.endpoint=unix:///var/run/docker.sock"
+      - "--providers.swarm.network=bekom_webnet"
+      - "--providers.swarm.exposedbydefault=false"
       - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entryPoint.permanent=true"
+      - "--entrypoints.http.address=:80"
+      - "--entrypoints.https.address=:443"
+      - "--entrypoints.http.http.redirections.entryPoint.to=https"
+      - "--entrypoints.http.http.redirections.entryPoint.permanent=true"
       - "--certificatesresolvers.le.acme.tlschallenge=true"
       - "--certificatesresolvers.le.acme.email=le@tmp.opliko.dev"
       - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
@@ -20,6 +22,7 @@ services:
       - "--log"
       - --api
       - --accesslog
+      - --log.level=DEBUG
     ports:
       - "80:80"
       - "443:443"
@@ -34,22 +37,21 @@ services:
           - node.role == manager
       labels:
         - "traefik.enable=true"
-        - traefik.docker.network=webnet
-        - "traefik.tls.options.default.minVersion=VersionTLS13"
+        - traefik.docker.network=bekom_webnet
+        # - "traefik.tls.options.default.minVersion=VersionTLS13"
         - traefik.http.middlewares.admin-auth.basicauth.users=netrunners:$$apr1$$37ep4xmf$$X5BMTP2zFovOs5AI5CZEK0
         # https-redirect middleware to redirect HTTP to HTTPS
         # It can be re-used by other stacks in other Docker Compose files
-        - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
-        - traefik.http.middlewares.https-redirect.redirectscheme.permanent=true
+        # - traefik.http.middlewares.https-redirect.redirectscheme.scheme=https
+        # - traefik.http.middlewares.https-redirect.redirectscheme.permanent=true
         # traefik-http set up only to use the middleware to redirect to https
         # Uses the environment variable DOMAIN
         - traefik.http.routers.traefik-public-http.rule=Host(`traefik.bekom.pw.opliko.dev`)
-        - traefik.http.routers.traefik-public-http.entrypoints=web
-        - traefik.http.routers.traefik-public-http.middlewares=https-redirect
+        - traefik.http.routers.traefik-public-http.entrypoints=http
         # traefik-https the actual router using HTTPS
         # Uses the environment variable DOMAIN
         - traefik.http.routers.traefik-public-https.rule=Host(`traefik.bekom.pw.opliko.dev`)
-        - traefik.http.routers.traefik-public-https.entrypoints=websecure
+        - traefik.http.routers.traefik-public-https.entrypoints=https
         - traefik.http.routers.traefik-public-https.tls=true
         # Use the special Traefik service api@internal with the web UI/Dashboard
         - traefik.http.routers.traefik-public-https.service=api@internal
@@ -85,30 +87,46 @@ services:
       - db_root_password
       - db_password
 
+  cache:
+    image: redis:alpine
+    networks:
+      - dbnet
+    deploy:
+      labels:
+        - "traefik.enable=false"
   ctfd:
     image: ctfd/ctfd:latest
     environment:
-      - BASE_URL=https://ctfd.bekom.pw.opliko.dev
-      - PORT=8000
-      - WORKERS=1
-      - LOG_FOLDER=/var/log/CTFd
-      - UPLOAD_FOLDER=/var/uploads
-      - REVERSE_PROXY=True
+      BASE_URL: https://ctfd.bekom.pw.opliko.dev
+      PORT: 8000
+      WORKERS: 1
+      LOG_FOLDER: /var/log/CTFd
+      UPLOAD_FOLDER: /var/uploads
+      REVERSE_PROXY: "true"
+      REDIS_URL: redis://cache:6379
+      ACCESS_LOG: "-"
+      ERROR_LOG: "-"
+      SECRET_KEY: hjajdwawdawdawawdawdaw
     entrypoint: [ '/bin/sh', '-c', 'export DATABASE_URL="mysql+pymysql://ctfd:$$(cat /var/run/secrets/db_password)@db/ctfd" ; /opt/CTFd/docker-entrypoint.sh' ]
-    depends_on:
-      - db
+    volumes:
+      - ctfdlogs:/var/log/CTFd
+      - ctfddata:/var/uploads
+    ports:
+      - "8000:8000"
     networks:
       - webnet
       - dbnet
     deploy:
+      mode: replicated
+      replicas: 1
       labels:
         - "traefik.enable=true"
-        - traefik.docker.lbswarm=true
-        - traefik.docker.network=webnet
+        - "traefik.docker.lbswarm=true"
+        - "traefik.docker.network=bekom_webnet"
         - traefik.constraint-label=traefik-public
         - "traefik.http.routers.ctfd.rule=Host(`ctfd.bekom.pw.opliko.dev`)"
         - "traefik.http.routers.ctfd.middlewares=waf"
-        - "traefik.http.routers.ctfd.entrypoints=websecure"
+        - "traefik.http.routers.ctfd.entrypoints=https"
         - "traefik.http.routers.ctfd.tls=true"
         - "traefik.http.routers.ctfd.tls.certresolver=le"
         - "traefik.http.services.ctfd.loadbalancer.server.port=8000"
@@ -116,29 +134,36 @@ services:
         - "traefik.http.middlewares.waf.plugin.coraza.directives[1]=Include @crs-setup.conf.example"
         - "traefik.http.middlewares.waf.plugin.coraza.directives[2]=Include @owasp_crs/**.conf"
         - "traefik.http.middlewares.waf.plugin.coraza.directives[3]=SecDebugLog /dev/stdout"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[4]=SecDebugLogLevel 2"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[4]=SecAuditLog /dev/stdout"
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=SecDebugLogLevel 9"
         - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=SecRequestBodyAccess Off"
-        # - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=Include @coraza.conf-recommended"
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[6]=SecAuditLog /dev/stdout"
+        - "traefik.http.middlewares.waf.plugin.coraza.directives[6]=SecResponseBodyAccess Off"
         - "traefik.http.middlewares.waf.plugin.coraza.directives[7]=SecRuleEngine On"
         - "traefik.http.middlewares.waf.plugin.coraza.directives[8]=SecAction \"id:900000,phase:1,pass,t:none,nolog,tag:'OWASP_CRS',ver:'OWASP_CRS/4.3.0',setvar:tx.blocking_paranoia_level=2\""
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[9]=SecAction \"id:900130,phase:1,pass,t:none,nolog,tag:'OWASP_CRS',ver:'OWASP_CRS/4.3.0',setvar:tx.early_blocking=1\""
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[10]=SecDefaultAction \"phase:1,deny,log,status:400\""
-        - "traefik.http.middlewares.waf.plugin.coraza.directives[11]=SecDefaultAction \"phase:2,deny,log,status:400\""
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[9]=SecAction \"id:900130,phase:1,pass,t:none,nolog,tag:'OWASP_CRS',ver:'OWASP_CRS/4.3.0',setvar:tx.early_blocking=1\""
 
         # from: https://www.trustwave.com/en-us/resources/blogs/spiderlabs-blog/updated-modsecurity-advanced-topic-of-the-week-mitigating-slow-http-dos-attacks/
-        # - "traefik.http.middlewares.waf.plugin.coraza.directives[4]=SecRule RESPONSE_STATUS \"@streq 408\" \"phase:5,t:none,nolog,pass,setvar:ip.slow_dos_counter=+1,expirevar:ip.slow_dos_counter=60\""
-        # - "traefik.http.middlewares.waf.plugin.coraza.directives[5]=SecRule IP:SLOW_DOS_COUNTER \"@gt 5\" \"phase:1,t:none,log,drop,msg:'Client Connection Dropped due to high # of slow DoS alerts'\""
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[12]=SecRule RESPONSE_STATUS \"@streq 408\" \"phase:5,t:none,nolog,pass,setvar:ip.slow_dos_counter=+1,tx:ip.slow_dos_counter=60\""
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[13]=SecRule IP:SLOW_DOS_COUNTER \"@gt 5\" \"phase:1,t:none,log,drop,msg:'Client Connection Dropped due to high # of slow DoS alerts'\""
+        # - "traefik.http.middlewares.waf.plugin.coraza.directives[9]=SecRule REMOTE_ADDR \"194.29.160.181\" \"id:2222223, phase:1, pass, log, logdata:'request from WUT'\""
     secrets:
       - db_password
 
 volumes:
   traefik-certificates:
   dbdata:
+  ctfddata:
+  ctfdlogs:
 
 networks:
   webnet:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
   dbnet:
+    driver: overlay
+    driver_opts:
+      encrypted: "true"
 
 secrets:
   db_password:
